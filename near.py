@@ -1,12 +1,13 @@
 #!/usr/bin/python3
 import sys
 import re
-from collections import deque
+
 
 class Term(object):
     def __init__(self, term_str):
         self.term = term_str
         self.matcher = re.compile(self.term)
+
 
 class AllTerms(list):
     def add(self, term_str):
@@ -69,15 +70,15 @@ class Window(object):
         while termn.has_more():
             n = termn.head()
             if n < self.start:
-                print("dropping term2 line {}, not in previous range".format(n))
+                #print("dropping term2 line {}, not in previous range".format(n))
                 termn.pop()
                 continue
             if self.includes(n):
                 last_added = n
-                print("adding term2 line {}, in range".format(n))
+                #print("adding term2 line {}, in range".format(n))
                 termn.pop()
             elif n == last_added + 1:
-                print("adding term2 line {}, just at range+1".format(n))
+                #print("adding term2 line {}, just at range+1".format(n))
                 self.end += 1
                 last_added = n
                 termn.pop()
@@ -117,8 +118,9 @@ class SearchFile(object):
         while True:
             window = Window.from_first_term(term1)
             if window:
-                print("created window from term1: {}".format(window))
+                #print("created window from term1: {}".format(window))
                 if window.fill_from_subsequent_term(term2):
+                    #print("term2 adjusted window: {}".format(window))
                     self.windows.append(window)
             else:
                 break
@@ -127,21 +129,24 @@ class SearchFile(object):
         for window in self.windows:
             window.slice(self.contents)
 
-
     def process(self):
         try:
             with open(self.name) as f:
                 self.contents = list(f)
             self.find_matches()
-            for term in self.terms:
-                print(str(term))
+#            for term in self.terms:
+#                print(str(term))
 
             self.window_scan()
             self.window_fill()
+            if self.windows:
+                print(self.name)
             for window in self.windows:
-                print(str(window))
+                #print(str(window))
+                lines_out = []
                 for i, line in enumerate(window.lines):
-                    sys.stdout.write("{:3}: {}".format(i+window.start, line))
+                    lines_out.append("{:3}: {}".format(i+window.start, line))
+                print("".join(lines_out)+"--------------------")
 
         except Exception:
             raise
