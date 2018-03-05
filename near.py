@@ -28,7 +28,6 @@ class FileTerm(list):
     def has_more(self):
         return self.head_index < len(self)
 
-
     def pop(self):
         head = self.head()
         self.head_index += 1
@@ -81,7 +80,7 @@ class Window(object):
                 print("adding term2 line {}, just at range+1".format(n))
                 self.end += 1
                 last_added = n
-                termn.pop
+                termn.pop()
             else:
                 break
         if last_added < 0:
@@ -161,7 +160,7 @@ class Config(object):
     def __init__(self):
         self.terms = AllTerms()
         self.files = AllSearchFiles()
-        self.window_size = 5
+        self.window_size = 10
 
 
 CONFIG = Config()
