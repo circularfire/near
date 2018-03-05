@@ -6,7 +6,13 @@ import re
 class Term(object):
     def __init__(self, term_str):
         self.term = term_str
-        self.matcher = re.compile(self.term)
+        flags = 0
+        if near.case_insensitive:
+            flags |= re.IGNORECASE
+        self.matcher = re.compile(self.term, flags)
+
+    def found_in(self, string):
+        return bool(re.search(self.matcher, string))
 
 
 class AllTerms(list):
@@ -16,23 +22,12 @@ class AllTerms(list):
 
 class FileTerm(list):
     def __init__(self, term):
+        super(FileTerm,self).__init__()
         self.term = term  # Term object
-        self.head_index = 0
 
     def match(self, lineno, line):
-        if re.search(self.term.matcher, line):
+        if self.term.found_in(line):
             self.append(lineno)
-
-    def head(self):
-        return self[self.head_index]
-
-    def has_more(self):
-        return self.head_index < len(self)
-
-    def pop(self):
-        head = self.head()
-        self.head_index += 1
-        return head
 
     def __str__(self):
         return "/{}/: {}".format(self.term.term, repr(self))
@@ -41,48 +36,49 @@ class FileTerm(list):
 class Window(object):
     def __init__(self, start):
         self.start = start
-        self.end = start + CONFIG.window_size - 1
+        self.end = start + near.window_size - 1
         self.lines = []
 
     def extend(self, lineno):
-        self.end = lineno + CONFIG.window_size - 1
+        self.end = lineno + near.window_size - 1
 
     def includes(self, n):
         return self.start <= n <= self.end
 
+    def preceded_by(self, n):
+        return n < self.start
+
     @classmethod
     def from_first_term(cls, term):
         window = None
-        if term.has_more():
-            first = term.pop()
-            window = cls(first)
-            while term.has_more():
-                n = term.head()
-                if window.includes(n):
-                    window.extend(n)
-                    term.pop()
-                else:
-                    break
+        if term:
+            window = cls(term.pop(0))
+            while term and window.includes(term[0]):
+                window.extend(term.pop(0))
         return window
 
-    def fill_from_subsequent_term(self, termn):
+    def fill_from_subsequent_term(self, term):
         last_added = -1
-        while termn.has_more():
-            n = termn.head()
-            if n < self.start:
+        while term:
+            n = term[0]
+            if self.preceded_by(n):
+                # this line is before our range, possibly after some earlier range
                 #print("dropping term2 line {}, not in previous range".format(n))
-                termn.pop()
+                term.pop(0)
                 continue
-            if self.includes(n):
+            elif self.includes(n):
+                # in our range, add it
                 last_added = n
                 #print("adding term2 line {}, in range".format(n))
-                termn.pop()
+                term.pop(0)
             elif n == last_added + 1:
+                # elastic, stretch range to cover next line
                 #print("adding term2 line {}, just at range+1".format(n))
                 self.end += 1
                 last_added = n
-                termn.pop()
+                term.pop(0)
             else:
+                # nothing else (or nothing at all) in our range
                 break
         if last_added < 0:
             return False
@@ -115,21 +111,19 @@ class SearchFile(object):
         term1 = self.terms[0]
         term2 = self.terms[1]
 
-        while True:
+        while term1:
             window = Window.from_first_term(term1)
             if window:
                 #print("created window from term1: {}".format(window))
                 if window.fill_from_subsequent_term(term2):
                     #print("term2 adjusted window: {}".format(window))
                     self.windows.append(window)
-            else:
-                break
 
     def window_fill(self):
         for window in self.windows:
             window.slice(self.contents)
 
-    def process(self):
+    def search(self):
         try:
             with open(self.name) as f:
                 self.contents = list(f)
@@ -148,40 +142,43 @@ class SearchFile(object):
                     lines_out.append("{:3}: {}".format(i+window.start, line))
                 print("".join(lines_out)+"--------------------")
 
-        except Exception:
-            raise
-
+        except IOError as ioe:
+            sys.stderr.write(str(ioe)+"\n")
 
 
 class AllSearchFiles(list):
     def add(self, filename, terms):
         self.append(SearchFile(filename, terms))
 
-    def process(self):
+    def search(self):
         for file in self:
-            file.process()
+            file.search()
 
-class Config(object):
+class Near(object):
     def __init__(self):
         self.terms = AllTerms()
         self.files = AllSearchFiles()
-        self.window_size = 10
+        self.window_size = 8
+        self.case_insensitive = False
+        self.numbered_lines = False
+
+    def search_all_files(self):
+        self.files.search()
 
 
-CONFIG = Config()
+near = Near()
 
-def go():
+def main():
     if len(sys.argv) < 4:
         print("usage term1 term2 file [file...]")
         sys.exit(1)
-
-    CONFIG.terms.add(sys.argv[1])
-    CONFIG.terms.add(sys.argv[2])
+    near.terms.add(sys.argv[1])
+    near.terms.add(sys.argv[2])
     for filename in sys.argv[3:]:
-        CONFIG.files.add(filename, CONFIG.terms)
+        near.files.add(filename, near.terms)
 
-    CONFIG.files.process()
+    near.search_all_files()
 
 
 if __name__ == '__main__':
-    go()
+    main()
