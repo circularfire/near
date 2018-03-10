@@ -1,7 +1,16 @@
-#!/usr/bin/python3
+"""
+A utility to find search terms within a specfied line window.
+"""
+from __future__ import print_function
 import sys
 import re
+from bisect import bisect_left
 import click
+
+
+DEFAULT_WINDOW_SIZE = 8
+
+
 
 class SearchTerm(object):
     """
@@ -39,6 +48,8 @@ class AllSearchTerms(dict):
 class FileTermMap(list):
     """
     A map of all lines in a file which contain the search term.
+
+    This list is naturally sorted on creation. 
     """
     def __init__(self, search_term):
         super(FileTermMap,self).__init__()
@@ -47,6 +58,9 @@ class FileTermMap(list):
     def match(self, lineno, line):
         if self.search_term.found_in(line):
             self.append(lineno)
+
+    def at_or_after(self, start):
+        return self[bisect_left(self, start):]
 
     def __str__(self):
         return "{}: {}".format(str(self.search_term), repr(self))
@@ -60,6 +74,7 @@ class Window(object):
     def __init__(self, start):
         self.start = start
         self.end = start + app.config.window_size - 1
+        self.has_match = False
         self.lines = []
 
     def extend(self, lineno):
@@ -85,45 +100,34 @@ class Window(object):
                 window.extend(term.pop(0))
         return window
 
-    def fill_from_subsequent_term(self, term):
+    def match_subsequent_term(self, term):
         """
         Given a window started from the first search term,
         see if a subsequent search term is in that window.
         May possibly shorten or extend the window depending
         on the distance of the last term in that window.
 
-        Also, drop any instances of this term which came
-        before this window's start.  They aren't in this
-        window or the preceding window, so no window match.
-
-        :return: True if subsequent term found in window, False if no match
         """
         last_added = -1
-        while term:
-            n = term[0]
-            if self.preceded_by(n):
-                # this line is before our range, possibly after some earlier range
-                #print("dropping term2 line {}, not in previous range".format(n))
-                term.pop(0)
-                continue
-            elif self.includes(n):
+        for n in term.at_or_after(self.start):
+            if self.includes(n):
                 # in our range, add it
                 last_added = n
                 #print("adding term2 line {}, in range".format(n))
-                term.pop(0)
-            elif app.config.elastic and n == last_added + 1:
+            elif  n == (last_added + 1) and app.config.elastic:
                 # stretch range to cover next line
                 #print("adding term2 line {}, just at range+1".format(n))
                 self.end += 1
                 last_added = n
-                term.pop(0)
             else:
                 # nothing else (or nothing at all) in our range
                 break
-        if last_added < 0:
-            return False
-        self.end = last_added
-        return True
+        if last_added >= 0:
+            if self.has_match:
+                self.end = max(self.end, last_added)
+            else:
+                self.end = last_added
+                self.has_match = True
 
     def slice(self, lines):
         # note, if we do context pre/post extension, make sure it's in range of lines
@@ -154,15 +158,15 @@ class SearchFile(object):
         """
         Create a list of Windows which contain all search terms.
         """
-        term1 = self.search_terms[0]
-        term2 = self.search_terms[1]
-
-        while term1:
-            window = Window.from_first_term(term1)
+        first_term = self.search_terms[0]
+        while first_term:
+            window = Window.from_first_term(first_term)
             if window:
-                #print("created window from term1: {}".format(window))
-                if window.fill_from_subsequent_term(term2):
-                    #print("term2 adjusted window: {}".format(window))
+                #print("created window from first term: {}".format(window))
+                for term in self.search_terms[1:]:
+                    window.match_subsequent_term(term)
+                if window.has_match:
+                    #print("subsequent term adjusted window: {}".format(window))
                     self.windows.append(window)
 
     def window_fill(self):
@@ -232,19 +236,8 @@ app = App()
 
 
 """
-
-Args
-
 two terms (optionally 3-?)
 any number of files
-
-Options
-
-window size: int (1-?)
-elastic: bool (allow expansion if term found just outside window - up to ? lines)
-case insensitive (? and possibly other RE options)
-line numbering
-
 
 ...discussion...
 
@@ -260,25 +253,30 @@ many other code blocks often end this way.
 *
 file tree search (later, allow pruning)
 
-
-
 """
-DEFAULT_WINDOW_SIZE = 8
 
 @click.command()
-@click.option('--window-size', '-w', default=DEFAULT_WINDOW_SIZE,
-help='window size (what is "near").')
+@click.option('--distance', '-l', default=DEFAULT_WINDOW_SIZE,
+help='range of lines to consider "near".')
 @click.option('--elastic/--no-elastic', is_flag=True, default=True,
-help='automatically extend when term found just outside window.')
+help='automatically extend when term found just outside range.')
 @click.option('--nocase', '-i', is_flag=True, default=False,
 help='ignore case.')
 @click.option('--number-lines', '-nl', is_flag=True, default=False,
-help='number lines.')
+help='show line numbers.')
 @click.argument('terms', nargs=2)
+# TODO: modify classes to accept a click.File instead of filename
 #@click.argument('files', type=click.File('r'), nargs=-1)
 @click.argument('files', nargs=-1)
-def cli(window_size, elastic, nocase, number_lines, terms, files):
-    app.config.window_size = window_size
+def cli(distance, elastic, nocase, number_lines, terms, files):
+    """
+    Find two* search terms which are within a certain
+    number of lines of each other. 
+    
+
+    * may allow more than two search terms in future
+    """
+    app.config.window_size = distance
     app.config.elastic = elastic
     app.config.case_insensitive = nocase
     app.config.numbered_lines = number_lines
@@ -295,3 +293,4 @@ def cli(window_size, elastic, nocase, number_lines, terms, files):
 
 if __name__ == '__main__':
     cli()
+
