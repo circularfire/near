@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 import sys
 import re
-
+import click
 
 class SearchTerm(object):
     """
@@ -111,8 +111,8 @@ class Window(object):
                 last_added = n
                 #print("adding term2 line {}, in range".format(n))
                 term.pop(0)
-            elif n == last_added + 1:
-                # elastic, stretch range to cover next line
+            elif app.config.elastic and n == last_added + 1:
+                # stretch range to cover next line
                 #print("adding term2 line {}, just at range+1".format(n))
                 self.end += 1
                 last_added = n
@@ -210,6 +210,27 @@ class AllSearchFiles(list):
             file.search()
             file.display_all_matches()
 
+class Config(object):
+    def __init__(self):
+        self.window_size = 8
+        self.case_insensitive = False
+        self.numbered_lines = True
+        self.blank_lines_relevant = True
+        self.elastic = True
+
+class App(object):
+    def __init__(self):
+        self.config = Config()
+        self.search_terms = AllSearchTerms()
+        self.files = AllSearchFiles()
+
+    def search_all_files(self):
+        self.files.search()
+
+
+app = App()
+
+
 """
 
 Args
@@ -242,39 +263,35 @@ file tree search (later, allow pruning)
 
 
 """
+DEFAULT_WINDOW_SIZE = 8
 
-class Config(object):
-    def __init__(self):
-        self.window_size = 8
-        self.case_insensitive = False
-        self.numbered_lines = True
-        self.blank_lines_relevant = True
-
-class App(object):
-    def __init__(self):
-        self.config = Config()
-        self.search_terms = AllSearchTerms()
-        self.files = AllSearchFiles()
-
-    def search_all_files(self):
-        self.files.search()
-
-
-app = App()
-
-def main():
-    if len(sys.argv) < 4:
-        print("usage term1 term2 file [file...]")
-        sys.exit(1)
-    app.search_terms.add('term1', sys.argv[1])
-    app.search_terms.add('term2', sys.argv[2])
+@click.command()
+@click.option('--window-size', '-w', default=DEFAULT_WINDOW_SIZE,
+help='window size (what is "near").')
+@click.option('--elastic/--no-elastic', is_flag=True, default=True,
+help='automatically extend when term found just outside window.')
+@click.option('--nocase', '-i', is_flag=True, default=False,
+help='ignore case.')
+@click.option('--number-lines', '-nl', is_flag=True, default=False,
+help='number lines.')
+@click.argument('terms', nargs=2)
+#@click.argument('files', type=click.File('r'), nargs=-1)
+@click.argument('files', nargs=-1)
+def cli(window_size, elastic, nocase, number_lines, terms, files):
+    app.config.window_size = window_size
+    app.config.elastic = elastic
+    app.config.case_insensitive = nocase
+    app.config.numbered_lines = number_lines
+    app.config.blank_lines_relevant = True
+    app.search_terms.add('term1', terms[0])
+    app.search_terms.add('term2', terms[1])
     #if app.config.blank_lines_relevant:
     #    app.search_terms.add('blankline', r'^\s*$')
-    for filename in sys.argv[3:]:
+    for filename in files:
         app.files.add(filename, app.search_terms)
 
     app.search_all_files()
 
 
 if __name__ == '__main__':
-    main()
+    cli()
