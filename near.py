@@ -45,14 +45,14 @@ class AllSearchTerms(dict):
         self[name] = SearchTerm(name, term_str)
 
 
-class FileTermMap(list):
+class TermLineMap(list):
     """
     A map of all lines in a file which contain the search term.
 
     This list is naturally sorted on creation. 
     """
     def __init__(self, search_term):
-        super(FileTermMap,self).__init__()
+        super(TermLineMap,self).__init__()
         self.search_term = search_term  # SearchTerm object
 
     def match(self, lineno, line):
@@ -87,20 +87,20 @@ class Window(object):
         return n < self.start
 
     @classmethod
-    def from_first_term(cls, term):
+    def from_first_term(cls, linemap):
         """
         Create a window starting at a line where the first
         search term was found.  
         """
-        window = None
-        if term:
-            window = cls(term.pop(0))
-            while term and window.includes(term[0]):
-                # might want to limit extension to window_len * 2 or something like that
-                window.extend(term.pop(0))
+        if not linemap:
+            return None
+        window = cls(linemap.pop(0))
+        while linemap and window.includes(linemap[0]):
+            # might want to limit extension to window_len * 2 or something like that
+            window.extend(linemap.pop(0))
         return window
 
-    def match_subsequent_term(self, term):
+    def match_subsequent_term(self, linemap):
         """
         Given a window started from the first search term,
         see if a subsequent search term is in that window.
@@ -108,22 +108,23 @@ class Window(object):
         on the distance of the last term in that window.
 
         """
-        last_added = -1
-        for n in term.at_or_after(self.start):
-            if self.includes(n):
+        last_added = (-2)
+        for lineno in linemap.at_or_after(self.start):
+            if self.includes(lineno):
                 # in our range, add it
-                last_added = n
-                #print("adding term2 line {}, in range".format(n))
-            elif  n == (last_added + 1) and app.config.elastic:
+                last_added = lineno
+                #print("adding term2 line {}, in range".format(lineno))
+            elif  lineno == (last_added + 1) and app.config.elastic:
                 # stretch range to cover next line
-                #print("adding term2 line {}, just at range+1".format(n))
+                #print("adding term2 line {}, just at range+1".format(lineno))
                 self.end += 1
-                last_added = n
+                last_added = lineno
             else:
                 # nothing else (or nothing at all) in our range
                 break
         if last_added >= 0:
-            if self.has_match:
+            if self.has_match:  
+                # earlier call with another term matched
                 self.end = max(self.end, last_added)
             else:
                 self.end = last_added
@@ -145,26 +146,26 @@ class SearchFile(object):
         self.name = filename
         self.contents = []
         self.windows = []
-        self.search_terms = [FileTermMap(terms['term1']), FileTermMap(terms['term2'])]
+        self.term_linemaps = [TermLineMap(terms['term1']), TermLineMap(terms['term2'])]
 
     def find_matches(self):
         for lineno, line in enumerate(self.contents):
-            for search_term in self.search_terms:
-                search_term.match(lineno, line)
-        #for search_term in self.search_terms:
-        #    print(str(search_term))
+            for term_linemap in self.term_linemaps:
+                term_linemap.match(lineno, line)
+        #for term_linemap in self.term_linemaps:
+        #    print(str(term_linemap))
 
     def window_scan(self):
         """
         Create a list of Windows which contain all search terms.
         """
-        first_term = self.search_terms[0]
-        while first_term:
-            window = Window.from_first_term(first_term)
+        first_term_linemap = self.term_linemaps[0]
+        while first_term_linemap:
+            window = Window.from_first_term(first_term_linemap)
             if window:
                 #print("created window from first term: {}".format(window))
-                for term in self.search_terms[1:]:
-                    window.match_subsequent_term(term)
+                for term_linemap in self.term_linemaps[1:]:
+                    window.match_subsequent_term(term_linemap)
                 if window.has_match:
                     #print("subsequent term adjusted window: {}".format(window))
                     self.windows.append(window)
@@ -206,8 +207,8 @@ class SearchFile(object):
 
 
 class AllSearchFiles(list):
-    def add(self, filename, search_terms):
-        self.append(SearchFile(filename, search_terms))
+    def add(self, filename, term_linemaps):
+        self.append(SearchFile(filename, term_linemaps))
 
     def search(self):
         for file in self:
@@ -225,7 +226,7 @@ class Config(object):
 class App(object):
     def __init__(self):
         self.config = Config()
-        self.search_terms = AllSearchTerms()
+        self.term_linemaps = AllSearchTerms()
         self.files = AllSearchFiles()
 
     def search_all_files(self):
@@ -249,6 +250,9 @@ many other code blocks often end this way.
 - extend window to next blank line(s)
 - allow same behaviours for user-specified file delimiters, 
   perhaps a regex (using a regex to ID blank lines now anyway)
+
+*
+allow pre/post window lines for context (like grep -A -B but easier)
 
 *
 file tree search (later, allow pruning)
@@ -281,12 +285,12 @@ def cli(distance, elastic, nocase, number_lines, terms, files):
     app.config.case_insensitive = nocase
     app.config.numbered_lines = number_lines
     app.config.blank_lines_relevant = True
-    app.search_terms.add('term1', terms[0])
-    app.search_terms.add('term2', terms[1])
+    app.term_linemaps.add('term1', terms[0])
+    app.term_linemaps.add('term2', terms[1])
     #if app.config.blank_lines_relevant:
-    #    app.search_terms.add('blankline', r'^\s*$')
+    #    app.term_linemaps.add('blankline', r'^\s*$')
     for filename in files:
-        app.files.add(filename, app.search_terms)
+        app.files.add(filename, app.term_linemaps)
 
     app.search_all_files()
 
