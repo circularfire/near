@@ -12,7 +12,7 @@ DEFAULT_WINDOW_SIZE = 8
 
 AND_MATCH, OR_MATCH = range(2)
 NO_BORDER, EXTEND_TO_BORDER, TRUNCATE_AT_BORDER = range(3)
-# matches a blank line
+# matches a blank line  (default border)
 BLANK_LINE_TERM = r'^\s*$'
 
 
@@ -124,6 +124,8 @@ class TermLineMap(list):
             if border_linemap:
                 # TODO: if truncating at border, or extending to border,
                 # this seems like the place to do it.
+                # note - if advancing to / truncating at border, 
+                # will probably do alternate to the includes while loop below
                 pass
             while self and window.includes(self[0]):
                 # TODO: might want to limit extension to window_len * 2 
@@ -179,9 +181,9 @@ class SearchFile(object):
             for term in self.term_linemaps:
                 term.match_line(lineno, line)
                 #    print(str(term))
-            if self.border_term:
-                border_term.match_line(lineno, line)
-                #    print(str(border_term))
+            if self.border_linemap:
+                border_linemap.match_line(lineno, line)
+                #    print(str(self.border_linemap))
 
     def scan_linemaps_for_window_matches(self):
         """
@@ -265,9 +267,6 @@ app = App()
 
 
 """
-two terms (optionally 3-?)
-any number of files
-
 ...discussion...
 
 *
@@ -277,22 +276,21 @@ many other code blocks often end this way.
 - stop at blank line(s) (default to one, but optionally 2 or more?)
 - extend window to next blank line(s)
 - allow same behaviours for user-specified file delimiters, 
-  perhaps a regex (using a regex to ID blank lines now anyway)
+  perhaps a regex (default regex is blank lines now, could be specified)
 
 *
 allow pre/post window lines for context (like grep -A -B but easier)
 
 *
 file tree search (later, allow pruning)
-
 """
 
 @click.command()
 @click.option('--distance', '-l', default=DEFAULT_WINDOW_SIZE,
 help='range of lines to consider "near".')
-@click.option('--and', 'and_match', multiple=True,
+@click.option('--and', 'and_term', multiple=True,
 help='additional -required- search term to match')
-@click.option('--or', 'or_match', multiple=True, 
+@click.option('--or', 'or_term', multiple=True, 
 help='additional -optional- search term to match')
 @click.option('--elastic/--no-elastic', is_flag=True, default=True,
 help='automatically extend when term found just outside range.')
@@ -302,7 +300,7 @@ help='ignore case.')
 help='show line numbers.')
 @click.argument('terms', nargs=2)
 @click.argument('files', nargs=-1)
-def cli(distance, and_match, or_match, elastic, nocase, number_lines, terms, files):
+def cli(distance, and_term, or_term, elastic, nocase, number_lines, terms, files):
     """
     Find search terms which are within a certain number of lines 
     of each other. Two terms are required, and both must be present
@@ -317,12 +315,12 @@ def cli(distance, and_match, or_match, elastic, nocase, number_lines, terms, fil
     app.config.elastic = elastic
     app.config.case_insensitive = nocase
     app.config.numbered_lines = number_lines
-    #app.config.border_action = NO_BORDER
+    #app.config.border_action = NO_BORDER  # TODO: add click options for this
     app.terms.add(terms[0])
     app.terms.add(terms[1], operation=AND_MATCH)
-    for term in and_match:
+    for term in and_term:
         app.terms.add(term, operation=AND_MATCH)
-    for term in or_match:
+    for term in or_term:
         app.terms.add(term, operation=OR_MATCH)
     for filename in files:
         app.files.add(filename, app.terms)
