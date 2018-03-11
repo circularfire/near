@@ -10,6 +10,10 @@ import click
 
 DEFAULT_WINDOW_SIZE = 8
 
+AND_MATCH, OR_MATCH = range(2)
+NO_BORDER, EXTEND_TO_BORDER, TRUNCATE_AT_BORDER = range(3)
+# matches a blank line
+BLANK_LINE_TERM = r'^\s*$'
 
 
 class SearchTerm(object):
@@ -17,8 +21,9 @@ class SearchTerm(object):
     A search term from the user, in regex format.
     Becomes a pre-compiled regular expression.
     """
-    def __init__(self, term_str):
+    def __init__(self, term_str, operation=AND_MATCH):
         self.term_str = term_str
+        self.operation = operation
         flags = 0
         if app.config.case_insensitive:
             flags |= re.IGNORECASE
@@ -31,26 +36,31 @@ class SearchTerm(object):
         return "/{}/".format(self.term_str)
 
 
-class AllSearchTerms(list):
+class AllSearchTerms(object):
     """
     All search terms supplied by the user.
     """
     def __init__(self):
-        super(AllSearchTerms, self).__init__()
+        self.terms = []
+        self.border = None
 
-    def add(self, term_str):
-        self.append(SearchTerm(term_str))
+    def add(self, term_str, operation=AND_MATCH):
+        self.terms.append(SearchTerm(term_str, operation))
+
+    def set_border(self, border_str=BLANK_LINE_TERM):
+        self.border = SearchTerm(border_str)
 
 
 class Window(object):
     """
-    A window on a range of lines in the file which contain 
-    all search terms.
+    A window on a range of lines in the file. It's expected
+    to contain lines containing the initial search term,
+    and lines with other search terms which are "near". 
     """
-    def __init__(self, lineno, end=None):
+    def __init__(self, lineno, end=None, match=False):
         self.start = lineno
         self.end = end if end else lineno + app.config.window_size
-        self.has_match = False
+        self.has_match = match
         self.lines = []
 
     def extend(self, lineno):
@@ -59,14 +69,17 @@ class Window(object):
     def includes(self, lineno):
         return self.start <= lineno <= self.end
 
-    # TODO: need some sort of AND/OR operators to control how merged
-    def merge(self, other):
-        self.end = max(self.end, other.end)
+    def merge(self, other, operation):
+        # TODO: feels like min/max behavior should depend on and/or
         if other.has_match:
-            self.has_match = True
+            self.end = min(self.end, other.end)
+        if operation == AND_MATCH:
+            self.has_match = self.has_match and other.has_match
+        else:
+            self.has_match = self.has_match or other.has_match
 
     def dup(self):
-        return Window(self.start, self.end)
+        return Window(self.start, self.end, match=self.has_match)
 
     def capture(self, lines):
         # note, if we do context pre/post extension, make sure it's in range of lines
@@ -78,9 +91,11 @@ class Window(object):
 
 class TermLineMap(list):
     """
-    A map of all lines in a file which contain the search term.
+    A map of all line numbers in a file which contain the search term.
 
-    This list is naturally sorted on creation. 
+    This list is naturally ordered by the fact that line numbers
+    are added during a sequential scan of the file.  As an ordered
+    list it can be binary-searched.
     """
     def __init__(self, search_term):
         super(TermLineMap,self).__init__()
@@ -91,9 +106,13 @@ class TermLineMap(list):
             self.append(lineno)
 
     def at_or_after(self, start):
+        """
+        List of all line numbers at or after the start line number.
+        """
+        # do binary search to find start of range
         return self[bisect_left(self, start):]
 
-    def candidates(self):
+    def candidates(self, border_linemap=None):
         """
         Generate candidate windows starting at a line containing 
         the first search term.
@@ -102,19 +121,26 @@ class TermLineMap(list):
         """
         while self:
             window = Window(self.pop(0))
+            if border_linemap:
+                # TODO: if truncating at border, or extending to border,
+                # this seems like the place to do it.
+                pass
             while self and window.includes(self[0]):
-                # might want to limit extension to window_len * 2 or something like that
+                # TODO: might want to limit extension to window_len * 2 
+                # or something like that
                 window.extend(self.pop(0))
+            # of course it has a match - wouldn't exist otherwise
+            window.has_match = True  
             yield window
 
     def match(self, candidate):
         """
         Given a window started from the first search term,
         see if this search term is in that window.
-
         """
-        last_added = (-2)
         window = candidate.dup()
+        window.has_match = False
+        last_added = (-2)
         for lineno in self.at_or_after(window.start):
             if window.includes(lineno):
                 # in our range, add it
@@ -129,7 +155,7 @@ class TermLineMap(list):
                 # nothing else (or nothing at all) in our range
                 break
         if last_added >= 0:
-            window.length = last_added
+            window.end = last_added
             window.has_match = True
         return window
 
@@ -141,18 +167,21 @@ class SearchFile(object):
     """
     A file to be searched.
     """
-    def __init__(self, filename, terms):
+    def __init__(self, filename, all_terms):
         self.name = filename
         self.contents = []
         self.windows = []
-        self.term_linemaps = [TermLineMap(term) for term in terms]
+        self.term_linemaps = [TermLineMap(term) for term in all_terms.terms]
+        self.border_linemap = TermLineMap(all_terms.border) if all_terms.border else None
 
     def create_linemaps_for_terms(self):
         for lineno, line in enumerate(self.contents):
             for term in self.term_linemaps:
                 term.match_line(lineno, line)
-        #for term in self.term_linemaps:
-        #    print(str(term))
+                #    print(str(term))
+            if self.border_term:
+                border_term.match_line(lineno, line)
+                #    print(str(border_term))
 
     def scan_linemaps_for_window_matches(self):
         """
@@ -163,7 +192,7 @@ class SearchFile(object):
             #print("created a window from first term: {}".format(window))
             result = window.dup()
             for term in self.term_linemaps[1:]:
-                result.merge( term.match(window) )
+                result.merge( term.match(window), term.search_term.operation )
             if result.has_match:
                 #print("subsequent term adjusted window: {}".format(result))
                 self.windows.append(result)
@@ -221,7 +250,7 @@ class Config(object):
         self.window_size = 8
         self.case_insensitive = False
         self.numbered_lines = True
-        self.blank_lines_relevant = True
+        self.border_action = NO_BORDER
         self.elastic = True
 
 
@@ -230,9 +259,6 @@ class App(object):
         self.config = Config()
         self.terms = AllSearchTerms()
         self.files = AllSearchFiles()
-
-    def search_all_files(self):
-        self.files.search()
 
 
 app = App()
@@ -264,6 +290,10 @@ file tree search (later, allow pruning)
 @click.command()
 @click.option('--distance', '-l', default=DEFAULT_WINDOW_SIZE,
 help='range of lines to consider "near".')
+@click.option('--and', 'and_match', multiple=True,
+help='additional -required- search term to match')
+@click.option('--or', 'or_match', multiple=True, 
+help='additional -optional- search term to match')
 @click.option('--elastic/--no-elastic', is_flag=True, default=True,
 help='automatically extend when term found just outside range.')
 @click.option('--nocase', '-i', is_flag=True, default=False,
@@ -271,30 +301,33 @@ help='ignore case.')
 @click.option('--number-lines', '-nl', is_flag=True, default=False,
 help='show line numbers.')
 @click.argument('terms', nargs=2)
-# TODO: modify classes to accept a click.File instead of filename
-#@click.argument('files', type=click.File('r'), nargs=-1)
 @click.argument('files', nargs=-1)
-def cli(distance, elastic, nocase, number_lines, terms, files):
+def cli(distance, and_match, or_match, elastic, nocase, number_lines, terms, files):
     """
-    Find two* search terms which are within a certain
-    number of lines of each other. 
+    Find search terms which are within a certain number of lines 
+    of each other. Two terms are required, and both must be present
+    within that distance. This match is 'term1 AND term2'.
+    Additional terms may be supplied with "--and term" / "--or term".
+
+    Search terms are regular expressions.  
     
 
-    * may allow more than two search terms in future
     """
     app.config.window_size = distance
     app.config.elastic = elastic
     app.config.case_insensitive = nocase
     app.config.numbered_lines = number_lines
-    app.config.blank_lines_relevant = True
+    #app.config.border_action = NO_BORDER
     app.terms.add(terms[0])
-    app.terms.add(terms[1])
-    #if app.config.blank_lines_relevant:
-    #    app.term_linemaps.add('blankline', r'^\s*$')
+    app.terms.add(terms[1], operation=AND_MATCH)
+    for term in and_match:
+        app.terms.add(term, operation=AND_MATCH)
+    for term in or_match:
+        app.terms.add(term, operation=OR_MATCH)
     for filename in files:
         app.files.add(filename, app.terms)
 
-    app.search_all_files()
+    app.files.search()
 
 
 if __name__ == '__main__':
