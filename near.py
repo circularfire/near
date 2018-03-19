@@ -13,9 +13,6 @@ NO_BORDER, EXTEND_TO_BORDER, TRUNCATE_AT_BORDER = range(3)
 # matches a blank line  (default border)
 BLANK_LINE_TERM = r'^\s*$'
 
-def debug(str):
-    sys.stderr.write(str+"\n")
-
 
 class SearchTerm(object):
     """
@@ -47,6 +44,7 @@ class AllSearchTerms(list):
             term.is_first = True
         self.append(term)
 
+
 class Window(object):
     """
     A window on a range of lines in the file. It's expected
@@ -61,6 +59,17 @@ class Window(object):
         self.lines = []
 
     def add_in_range(self, lineno, matched_terms):
+        """
+        If line is in range, add to this window, 
+        otherwise return False.
+        Also, track the terms which matched. This window
+        won't be valid unless it contains lines which 
+        matched at least two terms.
+
+        lineno: index of line which matched one (or more) terms
+        terms: set of terms whic matched this line
+        return: True if line added to window, False if out of range
+        """
         if self.is_empty:
             self.start = lineno
             self.limit = lineno + app.config.window_size
@@ -100,6 +109,10 @@ class SearchFile(object):
         self.terms = all_terms
 
     def match_windows(self):
+        """
+        Scan all lines in the file, generate match windows
+        containing search terms found near each other.
+        """
         window = Window()
         for lineno, line in enumerate(self.contents):
             matched_terms = [term for term in self.terms if term.found_in(line)]
@@ -109,13 +122,17 @@ class SearchFile(object):
             if app.config.ordered and window.is_empty and not first_term_found:
                 continue  # ordered: only start a window with first term
             if not window.add_in_range(lineno, matched_terms):
+                # This line number is out of current window's range
+                # if window contains good matches, emit it; if not, discard
                 if window.is_valid:
                     window.capture(self.contents)
                     yield window
+                # start new window, and add this line if allowed
                 window = Window()
                 if (not app.config.ordered) or first_term_found:
                     window.add_in_range(lineno, matched_terms)
         if window.is_valid:
+            # final window has valid matches, emit it
             window.capture(self.contents)
             yield window
         self.contents = [] # no longer needed
@@ -127,8 +144,7 @@ class SearchFile(object):
             lines_out = []
             if app.config.numbered_lines:
                 for i, line in enumerate(window.lines):
-                    lineno = "{:3}: ".format(i+window.start)
-                    lines_out.append(lineno + line)
+                    lines_out.append("{:3}: {}".format(i+window.start, line))
             else:
                 lines_out = window.lines
             print("".join(lines_out)+"--------------------")
@@ -219,7 +235,11 @@ def cli(distance, additional_terms, elastic, nocase, ordered, number_lines, term
     Find search terms which are within a certain number of lines 
     of each other. Two terms are required, and both must be present
     within that distance. This match is 'term1 AND term2'.
-    Additional terms may be supplied with "--and term" / "--or term".
+    Additional terms may be supplied with "--or term".
+    In this case, it will be 'term1 AND (term2 OR term3 OR ...)'
+    By default, the matched range must start with term1. This is
+    'ordered' match. Specifying --no-ordered means that a match
+    range can start with any term.
 
     Search terms are regular expressions.  
     
@@ -231,6 +251,7 @@ def cli(distance, additional_terms, elastic, nocase, ordered, number_lines, term
     app.config.ordered = ordered
     app.config.numbered_lines = number_lines
     #app.config.border_action = NO_BORDER  # TODO: add click options for this
+
     for term in terms:
         app.terms.add(term)
     for term in additional_terms:
