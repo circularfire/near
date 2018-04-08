@@ -2,8 +2,10 @@
 A utility to find search terms within a specfied line window.
 """
 from __future__ import print_function
+import os
 import sys
 import re
+import fnmatch
 import click
 
 
@@ -13,6 +15,9 @@ NO_BORDER, EXTEND_TO_BORDER, TRUNCATE_AT_BORDER = range(3)
 # matches a blank line  (default border)
 BLANK_LINE_TERM = r'^\s*$'
 
+
+def error(text):
+    sys.stderr.write(text+"\n")
 
 class SearchTerm(object):
     """
@@ -163,15 +168,40 @@ class SearchFile(object):
             for window in self.match_windows():
                 self.windows.append(window)
         except IOError as ioe:
-            sys.stderr.write(str(ioe)+"\n")
+            error(str(ioe))
 
 
 class AllSearchFiles(list):
-    def add(self, filename, terms):
-        self.append(SearchFile(filename, terms))
+
+    def add(self, filename):
+        self.append(SearchFile(filename, app.terms))
+
+    def add_all(self, files, default_recurse_basedir=None):
+        for filespec in files:
+            basedir, filename = os.path.split(filespec)
+            basedir = basedir or default_recurse_basedir
+            globbing = any(globchar in filename for globchar in '*?[]')
+            if basedir:
+                # recursive file search (with optional globbing)
+                if (os.path.exists(basedir) and os.path.isdir(basedir)):
+                    for directory, _, files_in_dir in os.walk(basedir):
+                        if globbing:
+                            files_in_dir = fnmatch.filter(files_in_dir, filename)
+                        for file in files_in_dir:
+                            self.add(os.path.join(directory, file))
+                else:
+                    error("Invalid directory: " + basedir)
+            elif globbing: 
+                # globbing, but no basedir, so no recursion
+                for file in fnmatch.filter(os.listdir('.'), filename):
+                    self.add(file)
+            else:
+                # no recursion, or globbing, so it's just a basic file name
+                self.add(filename)
 
     def search(self):
         for file in self:
+            #print (file.name)
             file.search()
             file.display_all_matches()
 
@@ -196,6 +226,11 @@ class App(object):
 app = App()
 
 
+
+
+
+
+
 """
 ...discussion...
 
@@ -209,6 +244,11 @@ many other code blocks often end this way.
   perhaps a regex (default regex is blank lines now, could be specified)
 
 *
+--before  --after
+more regexp terms, but used to limit scan range; useful for big log 
+files and the like.
+
+*
 allow pre/post window lines for context (like grep -A -B but easier)
 
 *
@@ -220,6 +260,8 @@ file tree search (later, allow pruning)
 help='range of lines to consider "near".')
 @click.option('--or', 'additional_terms', multiple=True,
 help='additional search term to match')
+@click.option('--recurse', '-r', is_flag=True, default=False,
+help='recursive file search')
 @click.option('--elastic/--no-elastic', is_flag=True, default=True,
 help='automatically extend when term found just outside range.')
 @click.option('--nocase', '-i', is_flag=True, default=False,
@@ -230,7 +272,7 @@ help='range normally starts with first term, unordered starts with any term.')
 help='show line numbers.')
 @click.argument('terms', nargs=2)
 @click.argument('files', nargs=-1)
-def cli(distance, additional_terms, elastic, nocase, ordered, number_lines, terms, files):
+def cli(distance, additional_terms, recurse, elastic, nocase, ordered, number_lines, terms, files):
     """
     Find search terms which are within a certain number of lines 
     of each other. Two terms are required, and both must be present
@@ -256,8 +298,8 @@ def cli(distance, additional_terms, elastic, nocase, ordered, number_lines, term
         app.terms.add(term)
     for term in additional_terms:
         app.terms.add(term)
-    for filename in files:
-        app.files.add(filename, app.terms)
+
+    app.files.add_all(files, default_recurse_basedir='.' if recurse else None)
 
     app.files.search()
 
